@@ -30,6 +30,21 @@ class JsonParamsParsingTest < ActionDispatch::IntegrationTest
     )
   end
 
+  test "nils are stripped from collections" do
+    assert_parses(
+      {"person" => nil},
+      "{\"person\":[null]}", { 'CONTENT_TYPE' => 'application/json' }
+    )
+    assert_parses(
+      {"person" => ['foo']},
+      "{\"person\":[\"foo\",null]}", { 'CONTENT_TYPE' => 'application/json' }
+    )
+    assert_parses(
+      {"person" => nil},
+      "{\"person\":[null, null]}", { 'CONTENT_TYPE' => 'application/json' }
+    )
+  end
+
   test "logs error if parsing unsuccessful" do
     with_test_routing do
       output = StringIO.new
@@ -46,7 +61,9 @@ class JsonParamsParsingTest < ActionDispatch::IntegrationTest
       begin
         $stderr = StringIO.new # suppress the log
         json = "[\"person]\": {\"name\": \"David\"}}"
-        assert_raise(MultiJson::DecodeError) { post "/parse", json, {'CONTENT_TYPE' => 'application/json', 'action_dispatch.show_exceptions' => false} }
+        exception = assert_raise(ActionDispatch::ParamsParser::ParseError) { post "/parse", json, {'CONTENT_TYPE' => 'application/json', 'action_dispatch.show_exceptions' => false} }
+        assert_equal MultiJson::DecodeError, exception.original_exception.class
+        assert_equal exception.original_exception.message, exception.message
       ensure
         $stderr = STDERR
       end
@@ -65,7 +82,7 @@ class JsonParamsParsingTest < ActionDispatch::IntegrationTest
     def with_test_routing
       with_routing do |set|
         set.draw do
-          match ':action', :to => ::JsonParamsParsingTest::TestController
+          post ':action', :to => ::JsonParamsParsingTest::TestController
         end
         yield
       end
@@ -105,6 +122,13 @@ class RootLessJSONParamsParsingTest < ActionDispatch::IntegrationTest
     )
   end
 
+  test "parses json with non-object JSON content" do
+    assert_parses(
+      {"user" => {"_json" => "string content" }, "_json" => "string content" },
+      "\"string content\"", { 'CONTENT_TYPE' => 'application/json' }
+    )
+  end
+
   private
     def assert_parses(expected, actual, headers = {})
       with_test_routing(UsersController) do
@@ -118,7 +142,7 @@ class RootLessJSONParamsParsingTest < ActionDispatch::IntegrationTest
     def with_test_routing(controller)
       with_routing do |set|
         set.draw do
-          match ':action', :to => controller
+          post ':action', :to => controller
         end
         yield
       end

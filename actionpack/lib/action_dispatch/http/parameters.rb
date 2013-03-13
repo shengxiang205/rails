@@ -4,10 +4,19 @@ require 'active_support/core_ext/hash/indifferent_access'
 module ActionDispatch
   module Http
     module Parameters
+      def initialize(env)
+        super
+        @symbolized_path_params = nil
+      end
+
       # Returns both GET and POST \parameters in a single hash.
       def parameters
         @env["action_dispatch.request.parameters"] ||= begin
-          params = request_parameters.merge(query_parameters)
+          params = begin
+            request_parameters.merge(query_parameters)
+          rescue EOFError
+            query_parameters.dup
+          end
           params.merge!(path_parameters)
           encode_params(params).with_indifferent_access
         end
@@ -35,6 +44,10 @@ module ActionDispatch
         @env["action_dispatch.request.path_parameters"] ||= {}
       end
 
+      def reset_parameters #:nodoc:
+        @env.delete("action_dispatch.request.parameters")
+      end
+
     private
 
       # TODO: Validate that the characters are UTF-8. If they aren't,
@@ -42,7 +55,7 @@ module ActionDispatch
       # should really prevent that from happening
       def encode_params(params)
         if params.is_a?(String)
-          return params.force_encoding("UTF-8").encode!
+          return params.force_encoding(Encoding::UTF_8).encode!
         elsif !params.is_a?(Hash)
           return params
         end
@@ -59,7 +72,7 @@ module ActionDispatch
         end
       end
 
-      # Convert nested Hash to HashWithIndifferentAccess
+      # Convert nested Hash to ActiveSupport::HashWithIndifferentAccess
       def normalize_parameters(value)
         case value
         when Hash

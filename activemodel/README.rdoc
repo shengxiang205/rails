@@ -1,7 +1,7 @@
 = Active Model -- model interfaces for Rails
 
 Active Model provides a known set of interfaces for usage in model classes.
-They allow for Action Pack helpers to interact with non-ActiveRecord models,
+They allow for Action Pack helpers to interact with non-Active Record models,
 for example. Active Model also helps building custom ORMs for use outside of
 the Rails framework.
 
@@ -11,10 +11,10 @@ code from Rails, or monkey patch entire helpers to make them handle objects
 that did not exactly conform to the Active Record interface. This would result
 in code duplication and fragile applications that broke on upgrades. Active
 Model solves this by defining an explicit API. You can read more about the
-API in ActiveModel::Lint::Tests.
+API in <tt>ActiveModel::Lint::Tests</tt>.
 
 Active Model provides a default module that implements the basic API required
-to integrate with Action Pack out of the box: +ActiveModel::Model+.
+to integrate with Action Pack out of the box: <tt>ActiveModel::Model</tt>.
 
     class Person
       include ActiveModel::Model
@@ -23,14 +23,14 @@ to integrate with Action Pack out of the box: +ActiveModel::Model+.
       validates_presence_of :name
     end
 
-    person = Person.new(:name => 'bob', :age => '18')
+    person = Person.new(name: 'bob', age: '18')
     person.name # => 'bob'
-    person.age # => 18
-    person.valid? # => false
+    person.age # => '18'
+    person.valid? # => true
 
 It includes model name introspections, conversions, translations and
 validations, resulting in a class suitable to be used with Action Pack.
-See +ActiveModel::Model+ for more examples.
+See <tt>ActiveModel::Model</tt> for more examples.
 
 Active Model also provides the following functionality to have ORM-like
 behavior out of the box:
@@ -41,7 +41,7 @@ behavior out of the box:
       include ActiveModel::AttributeMethods
 
       attribute_method_prefix 'clear_'
-      define_attribute_methods [:name, :age]
+      define_attribute_methods :name, :age
 
       attr_accessor :name, :age
 
@@ -71,11 +71,15 @@ behavior out of the box:
   This generates +before_create+, +around_create+ and +after_create+
   class methods that wrap your create method.
 
-  {Learn more}[link:classes/ActiveModel/CallBacks.html]
+  {Learn more}[link:classes/ActiveModel/Callbacks.html]
 
 * Tracking value changes
 
-  The ActiveModel::Dirty module allows for tracking attribute changes:
+    class Person
+      include ActiveModel::Dirty
+
+      attr_accessor :name
+    end
 
     person = Person.new
     person.name # => nil
@@ -116,9 +120,6 @@ behavior out of the box:
     person.errors.full_messages
     # => ["Name can not be nil"]
 
-    person.errors.full_messages
-    # => ["Name can not be nil"]
-
   {Learn more}[link:classes/ActiveModel/Errors.html]
 
 * Model name introspection
@@ -132,22 +133,36 @@ behavior out of the box:
 
   {Learn more}[link:classes/ActiveModel/Naming.html]
 
-* Observer support
-
-  ActiveModel::Observers allows your object to implement the Observer
-  pattern in a Rails App and take advantage of all the standard observer
-  functions.
-
-  {Learn more}[link:classes/ActiveModel/Observer.html]
-
 * Making objects serializable
 
   ActiveModel::Serialization provides a standard interface for your object
   to provide +to_json+ or +to_xml+ serialization.
 
+    class SerialPerson
+      include ActiveModel::Serialization
+
+      attr_accessor :name
+
+      def attributes
+        {'name' => name}
+      end
+    end
+
     s = SerialPerson.new
     s.serializable_hash   # => {"name"=>nil}
+
+    class SerialPerson
+      include ActiveModel::Serializers::JSON
+    end
+
+    s = SerialPerson.new
     s.to_json             # => "{\"name\":null}"
+
+    class SerialPerson
+      include ActiveModel::Serializers::Xml
+    end
+
+    s = SerialPerson.new
     s.to_xml              # => "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<serial-person...
 
   {Learn more}[link:classes/ActiveModel/Serialization.html]

@@ -1,5 +1,5 @@
-require 'active_support/concern'
 require 'active_support/core_ext/hash/indifferent_access'
+require 'active_support/core_ext/object/duplicable'
 require 'thread'
 
 module ActiveRecord
@@ -9,10 +9,11 @@ module ActiveRecord
     included do
       ##
       # :singleton-method:
-      # Accepts a logger conforming to the interface of Log4r or the default Ruby 1.8+ Logger class,
-      # which is then passed on to any new database connections made and which can be retrieved on both
-      # a class and instance level by calling +logger+.
-      config_attribute :logger, :global => true
+      #
+      # Accepts a logger conforming to the interface of Log4r which is then
+      # passed on to any new database connections made and which can be
+      # retrieved on both a class and instance level by calling +logger+.
+      mattr_accessor :logger, instance_writer: false
 
       ##
       # :singleton-method:
@@ -41,14 +42,14 @@ module ActiveRecord
       #         'database' => 'db/production.sqlite3'
       #      }
       #   }
-      config_attribute :configurations, :global => true
+      mattr_accessor :configurations, instance_writer: false
       self.configurations = {}
 
       ##
       # :singleton-method:
       # Determines whether to use Time.utc (using :utc) or Time.local (using :local) when pulling
       # dates and times from the database. This is set to :utc by default.
-      config_attribute :default_timezone, :global => true
+      mattr_accessor :default_timezone, instance_writer: false
       self.default_timezone = :utc
 
       ##
@@ -59,30 +60,17 @@ module ActiveRecord
       # ActiveRecord::Schema file which can be loaded into any database that
       # supports migrations. Use :ruby if you want to have different database
       # adapters for, e.g., your development and test environments.
-      config_attribute :schema_format, :global => true
+      mattr_accessor :schema_format, instance_writer: false
       self.schema_format = :ruby
 
       ##
       # :singleton-method:
       # Specify whether or not to use timestamps for migration versions
-      config_attribute :timestamped_migrations, :global => true
+      mattr_accessor :timestamped_migrations, instance_writer: false
       self.timestamped_migrations = true
 
-      ##
-      # :singleton-method:
-      # The connection handler
-      config_attribute :connection_handler
+      class_attribute :connection_handler, instance_writer: false
       self.connection_handler = ConnectionAdapters::ConnectionHandler.new
-
-      ##
-      # :singleton-method:
-      # Specifies wether or not has_many or has_one association option
-      # :dependent => :restrict raises an exception. If set to true, the
-      # ActiveRecord::DeleteRestrictionError exception will be raised
-      # along with a DEPRECATION WARNING. If set to false, an error would
-      # be added to the model instead.
-      config_attribute :dependent_restrict_raises, :global => true
-      self.dependent_restrict_raises = true
     end
 
     module ClassMethods
@@ -95,7 +83,12 @@ module ActiveRecord
         @attribute_methods_mutex = Mutex.new
 
         # force attribute methods to be higher in inheritance hierarchy than other generated methods
-        generated_attribute_methods
+        generated_attribute_methods.const_set(:AttrNames, Module.new {
+          def self.const_missing(name)
+            const_set(name, [name.to_s.sub(/ATTR_/, '')].pack('h*').freeze)
+          end
+        })
+
         generated_feature_methods
       end
 
@@ -126,12 +119,24 @@ module ActiveRecord
         object.is_a?(self)
       end
 
+      # Returns an instance of <tt>Arel::Table</tt> loaded with the current table name.
+      #
+      #   class Post < ActiveRecord::Base
+      #     scope :published_and_commented, published.and(self.arel_table[:comments_count].gt(0))
+      #   end
       def arel_table
         @arel_table ||= Arel::Table.new(table_name, arel_engine)
       end
 
+      # Returns the Arel engine.
       def arel_engine
-        @arel_engine ||= connection_handler.retrieve_connection_pool(self) ? self : active_record_super.arel_engine
+        @arel_engine ||= begin
+          if Base == self || connection_handler.retrieve_connection_pool(self)
+            self
+          else
+            superclass.arel_engine
+          end
+       end
       end
 
       private
@@ -152,32 +157,24 @@ module ActiveRecord
     # In both instances, valid attribute keys are determined by the column names of the associated table --
     # hence you can't have attributes that aren't part of the table columns.
     #
-    # +initialize+ respects mass-assignment security and accepts either +:as+ or +:without_protection+ options
-    # in the +options+ parameter.
-    #
-    # ==== Examples
+    # ==== Example:
     #   # Instantiates a single new object
-    #   User.new(:first_name => 'Jamie')
-    #
-    #   # Instantiates a single new object using the :admin mass-assignment security role
-    #   User.new({ :first_name => 'Jamie', :is_admin => true }, :as => :admin)
-    #
-    #   # Instantiates a single new object bypassing mass-assignment security
-    #   User.new({ :first_name => 'Jamie', :is_admin => true }, :without_protection => true)
-    def initialize(attributes = nil, options = {})
-      @attributes = self.class.initialize_attributes(self.class.column_defaults.dup)
+    #   User.new(first_name: 'Jamie')
+    def initialize(attributes = nil)
+      defaults = self.class.column_defaults.dup
+      defaults.each { |k, v| defaults[k] = v.dup if v.duplicable? }
+
+      @attributes   = self.class.initialize_attributes(defaults)
       @columns_hash = self.class.column_types.dup
 
       init_internals
-
       ensure_proper_type
-
       populate_with_current_scope_attributes
 
-      assign_attributes(attributes, options) if attributes
+      assign_attributes(attributes) if attributes
 
       yield self if block_given?
-      run_callbacks :initialize if _initialize_callbacks.any?
+      run_callbacks :initialize unless _initialize_callbacks.empty?
     end
 
     # Initialize an empty model object from +coder+. +coder+ must contain
@@ -191,7 +188,7 @@ module ActiveRecord
     #   post.init_with('attributes' => { 'title' => 'hello world' })
     #   post.title # => 'hello world'
     def init_with(coder)
-      @attributes = self.class.initialize_attributes(coder['attributes'])
+      @attributes   = self.class.initialize_attributes(coder['attributes'])
       @columns_hash = self.class.column_types.merge(coder['column_types'] || {})
 
       init_internals
@@ -204,22 +201,41 @@ module ActiveRecord
       self
     end
 
+    ##
+    # :method: clone
+    # Identical to Ruby's clone method.  This is a "shallow" copy.  Be warned that your attributes are not copied.
+    # That means that modifying attributes of the clone will modify the original, since they will both point to the
+    # same attributes hash. If you need a copy of your attributes hash, please use the #dup method.
+    #
+    #   user = User.first
+    #   new_user = user.clone
+    #   user.name               # => "Bob"
+    #   new_user.name = "Joe"
+    #   user.name               # => "Joe"
+    #
+    #   user.object_id == new_user.object_id            # => false
+    #   user.name.object_id == new_user.name.object_id  # => true
+    #
+    #   user.name.object_id == user.dup.name.object_id  # => false
+
+    ##
+    # :method: dup
     # Duped objects have no id assigned and are treated as new records. Note
     # that this is a "shallow" copy as it copies the object's attributes
     # only, not its associations. The extent of a "deep" copy is application
     # specific and is therefore left to the application to implement according
     # to its need.
     # The dup method does not preserve the timestamps (created|updated)_(at|on).
-    def initialize_dup(other)
-      cloned_attributes = other.clone_attributes(:read_attribute_before_type_cast)
-      self.class.initialize_attributes(cloned_attributes)
 
-      cloned_attributes.delete(self.class.primary_key)
+    ##
+    def initialize_dup(other) # :nodoc:
+      cloned_attributes = other.clone_attributes(:read_attribute_before_type_cast)
+      self.class.initialize_attributes(cloned_attributes, :serialized => false)
 
       @attributes = cloned_attributes
       @attributes[self.class.primary_key] = nil
 
-      run_callbacks(:initialize) if _initialize_callbacks.any?
+      run_callbacks(:initialize) unless _initialize_callbacks.empty?
 
       @changed_attributes = {}
       self.class.column_defaults.each do |attr, orig_value|
@@ -233,7 +249,6 @@ module ActiveRecord
       @new_record  = true
 
       ensure_proper_type
-      populate_with_current_scope_attributes
       super
     end
 
@@ -278,7 +293,8 @@ module ActiveRecord
 
     # Freeze the attributes hash such that associations are still accessible, even on destroyed records.
     def freeze
-      @attributes.freeze; self
+      @attributes.freeze
+      self
     end
 
     # Returns +true+ if the attributes hash has been frozen.
@@ -290,8 +306,6 @@ module ActiveRecord
     def <=>(other_object)
       if other_object.is_a?(self.class)
         self.to_key <=> other_object.to_key
-      else
-        nil
       end
     end
 
@@ -310,6 +324,7 @@ module ActiveRecord
     # also be used to "borrow" the connection to do database work that isn't
     # easily done without going straight to SQL.
     def connection
+      ActiveSupport::Deprecation.warn("#connection is deprecated in favour of accessing it via the class")
       self.class.connection
     end
 
@@ -332,7 +347,53 @@ module ActiveRecord
       Hash[methods.map { |method| [method, public_send(method)] }].with_indifferent_access
     end
 
+    def set_transaction_state(state) # :nodoc:
+      @transaction_state = state
+    end
+
+    def has_transactional_callbacks? # :nodoc:
+      !_rollback_callbacks.empty? || !_commit_callbacks.empty? || !_create_callbacks.empty?
+    end
+
     private
+
+    # Updates the attributes on this particular ActiveRecord object so that
+    # if it is associated with a transaction, then the state of the AR object
+    # will be updated to reflect the current state of the transaction
+    #
+    # The @transaction_state variable stores the states of the associated
+    # transaction. This relies on the fact that a transaction can only be in
+    # one rollback or commit (otherwise a list of states would be required)
+    # Each AR object inside of a transaction carries that transaction's
+    # TransactionState.
+    #
+    # This method checks to see if the ActiveRecord object's state reflects
+    # the TransactionState, and rolls back or commits the ActiveRecord object
+    # as appropriate.
+    #
+    # Since ActiveRecord objects can be inside multiple transactions, this
+    # method recursively goes through the parent of the TransactionState and
+    # checks if the ActiveRecord object reflects the state of the object.
+    def sync_with_transaction_state
+      update_attributes_from_transaction_state(@transaction_state, 0)
+    end
+
+    def update_attributes_from_transaction_state(transaction_state, depth)
+      if transaction_state && !has_transactional_callbacks?
+        unless @reflects_state[depth]
+          if transaction_state.committed?
+            committed!
+          elsif transaction_state.rolledback?
+            rolledback!
+          end
+          @reflects_state[depth] = true
+        end
+
+        if transaction_state.parent && !@reflects_state[depth+1]
+          update_attributes_from_transaction_state(transaction_state.parent, depth+1)
+        end
+      end
+    end
 
     # Under Ruby 1.9, Array#flatten will call #to_ary (recursively) on each of the elements
     # of the array, and then rescues from the possible NoMethodError. If those elements are
@@ -341,25 +402,28 @@ module ActiveRecord
     #
     # So we can avoid the method_missing hit by explicitly defining #to_ary as nil here.
     #
-    # See also http://tenderlovemaking.com/2011/06/28/til-its-ok-to-return-nil-from-to_ary/
+    # See also http://tenderlovemaking.com/2011/06/28/til-its-ok-to-return-nil-from-to_ary.html
     def to_ary # :nodoc:
       nil
     end
 
     def init_internals
       pk = self.class.primary_key
-
       @attributes[pk] = nil unless @attributes.key?(pk)
 
-      @aggregation_cache      = {}
-      @association_cache      = {}
-      @attributes_cache       = {}
-      @previously_changed     = {}
-      @changed_attributes     = {}
-      @readonly               = false
-      @destroyed              = false
-      @marked_for_destruction = false
-      @new_record             = true
+      @aggregation_cache        = {}
+      @association_cache        = {}
+      @attributes_cache         = {}
+      @previously_changed       = {}
+      @changed_attributes       = {}
+      @readonly                 = false
+      @destroyed                = false
+      @marked_for_destruction   = false
+      @new_record               = true
+      @txn                      = nil
+      @_start_transaction_state = {}
+      @transaction_state        = nil
+      @reflects_state           = [false]
     end
   end
 end

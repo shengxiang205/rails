@@ -5,7 +5,7 @@ require 'securerandom'
 
 module ActiveRecord
   module ConnectionAdapters
-    class SQLiteAdapter
+    class SQLite3Adapter
       class QuotingTest < ActiveRecord::TestCase
         def setup
           @conn = Base.sqlite3_connection :database => ':memory:',
@@ -17,7 +17,7 @@ module ActiveRecord
           @conn.extend(Module.new { def logger; end })
           column = Struct.new(:type, :name).new(:string, "foo")
           binary = SecureRandom.hex
-          expected = binary.dup.encode!('utf-8')
+          expected = binary.dup.encode!(Encoding::UTF_8)
           assert_equal expected, @conn.type_cast(binary, column)
         end
 

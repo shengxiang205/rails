@@ -6,14 +6,15 @@ module ActiveRecord
       ATTRIBUTE_TYPES_CACHED_BY_DEFAULT = [:datetime, :timestamp, :time, :date]
 
       included do
-        config_attribute :attribute_types_cached_by_default, :global => true
+        class_attribute :attribute_types_cached_by_default, instance_writer: false
         self.attribute_types_cached_by_default = ATTRIBUTE_TYPES_CACHED_BY_DEFAULT
       end
 
       module ClassMethods
-        # +cache_attributes+ allows you to declare which converted attribute values should
-        # be cached. Usually caching only pays off for attributes with expensive conversion
-        # methods, like time related columns (e.g. +created_at+, +updated_at+).
+        # +cache_attributes+ allows you to declare which converted attribute
+        # values should be cached. Usually caching only pays off for attributes
+        # with expensive conversion methods, like time related columns (e.g.
+        # +created_at+, +updated_at+).
         def cache_attributes(*attribute_names)
           cached_attributes.merge attribute_names.map { |attr| attr.to_s }
         end
@@ -31,21 +32,29 @@ module ActiveRecord
 
         protected
 
-        # We want to generate the methods via module_eval rather than define_method,
-        # because define_method is slower on dispatch and uses more memory (because it
-        # creates a closure).
+        # We want to generate the methods via module_eval rather than
+        # define_method, because define_method is slower on dispatch and
+        # uses more memory (because it creates a closure).
         #
-        # But sometimes the database might return columns with characters that are not
-        # allowed in normal method names (like 'my_column(omg)'. So to work around this
-        # we first define with the __temp__ identifier, and then use alias method to
-        # rename it to what we want.
-        def define_method_attribute(attr_name)
+        # But sometimes the database might return columns with
+        # characters that are not allowed in normal method names (like
+        # 'my_column(omg)'. So to work around this we first define with
+        # the __temp__ identifier, and then use alias method to rename
+        # it to what we want.
+        #
+        # We are also defining a constant to hold the frozen string of
+        # the attribute name. Using a constant means that we do not have
+        # to allocate an object on each call to the attribute method.
+        # Making it frozen means that it doesn't get duped when used to
+        # key the @attributes_cache in read_attribute.
+        def define_method_attribute(name)
+          safe_name = name.unpack('h*').first
           generated_attribute_methods.module_eval <<-STR, __FILE__, __LINE__ + 1
-            def __temp__
-              read_attribute('#{attr_name}') { |n| missing_attribute(n, caller) }
+            def __temp__#{safe_name}
+              read_attribute(AttrNames::ATTR_#{safe_name}) { |n| missing_attribute(n, caller) }
             end
-            alias_method '#{attr_name}', :__temp__
-            undef_method :__temp__
+            alias_method #{name.inspect}, :__temp__#{safe_name}
+            undef_method :__temp__#{safe_name}
           STR
         end
 
@@ -60,11 +69,14 @@ module ActiveRecord
         end
       end
 
-      # Returns the value of the attribute identified by <tt>attr_name</tt> after it has been typecast (for example,
-      # "2004-12-12" in a data column is cast to a date object, like Date.new(2004, 12, 12)).
+      # Returns the value of the attribute identified by <tt>attr_name</tt> after
+      # it has been typecast (for example, "2004-12-12" in a data column is cast
+      # to a date object, like Date.new(2004, 12, 12)).
       def read_attribute(attr_name)
         # If it's cached, just return it
-        @attributes_cache.fetch(attr_name.to_s) { |name|
+        # We use #[] first as a perf optimization for non-nil values. See https://gist.github.com/jonleighton/3552829.
+        name = attr_name.to_s
+        @attributes_cache[name] || @attributes_cache.fetch(name) {
           column = @columns_hash.fetch(name) {
             return @attributes.fetch(name) {
               if name == 'id' && self.class.primary_key != name

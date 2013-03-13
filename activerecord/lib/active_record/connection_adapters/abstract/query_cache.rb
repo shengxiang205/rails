@@ -2,16 +2,16 @@ module ActiveRecord
   module ConnectionAdapters # :nodoc:
     module QueryCache
       class << self
-        def included(base)
+        def included(base) #:nodoc:
           dirties_query_cache base, :insert, :update, :delete
         end
 
         def dirties_query_cache(base, *method_names)
           method_names.each do |method_name|
             base.class_eval <<-end_code, __FILE__, __LINE__ + 1
-              def #{method_name}(*)                         # def update_with_query_dirty(*args)
+              def #{method_name}(*)                         # def update_with_query_dirty(*)
                 clear_query_cache if @query_cache_enabled   #   clear_query_cache if @query_cache_enabled
-                super                                       #   update_without_query_dirty(*args)
+                super                                       #   super
               end                                           # end
             end_code
           end
@@ -56,7 +56,7 @@ module ActiveRecord
       end
 
       def select_all(arel, name = nil, binds = [])
-        if @query_cache_enabled
+        if @query_cache_enabled && !locked?(arel)
           sql = to_sql(arel, binds)
           cache_sql(sql, binds) { super(sql, name, binds) }
         else
@@ -65,6 +65,7 @@ module ActiveRecord
       end
 
       private
+
       def cache_sql(sql, binds)
         result =
           if @query_cache[sql].key?(binds)
@@ -82,6 +83,12 @@ module ActiveRecord
         else
           result.collect { |row| row.dup }
         end
+      end
+
+      # If arel is locked this is a SELECT ... FOR UPDATE or somesuch. Such
+      # queries should not be cached.
+      def locked?(arel)
+        arel.respond_to?(:locked) && arel.locked
       end
     end
   end

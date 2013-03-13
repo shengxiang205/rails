@@ -24,6 +24,7 @@ module ActiveRecord
 
     def dump(stream)
       header(stream)
+      extensions(stream)
       tables(stream)
       trailer(stream)
       stream
@@ -38,7 +39,7 @@ module ActiveRecord
       end
 
       def header(stream)
-        define_params = @version ? ":version => #{@version}" : ""
+        define_params = @version ? "version: #{@version}" : ""
 
         if stream.respond_to?(:external_encoding) && stream.external_encoding
           stream.puts "# encoding: #{stream.external_encoding.name}"
@@ -55,7 +56,7 @@ module ActiveRecord
 # from scratch. The latter is a flawed and unsustainable approach (the more migrations
 # you'll amass, the slower it'll run and the greater likelihood for issues).
 #
-# It's strongly recommended to check this file into your version control system.
+# It's strongly recommended that you check this file into your version control system.
 
 ActiveRecord::Schema.define(#{define_params}) do
 
@@ -66,12 +67,24 @@ HEADER
         stream.puts "end"
       end
 
+      def extensions(stream)
+        return unless @connection.supports_extensions?
+        extensions = @connection.extensions
+        if extensions.any?
+          stream.puts "  # These are extensions that must be enabled in order to support this database"
+          extensions.each do |extension|
+            stream.puts "  enable_extension #{extension.inspect}"
+          end
+          stream.puts
+        end
+      end
+
       def tables(stream)
         @connection.tables.sort.each do |tbl|
           next if ['schema_migrations', ignore_tables].flatten.any? do |ignored|
             case ignored
-            when String; tbl == ignored
-            when Regexp; tbl =~ ignored
+            when String; remove_prefix_and_suffix(tbl) == ignored
+            when Regexp; remove_prefix_and_suffix(tbl) =~ ignored
             else
               raise StandardError, 'ActiveRecord::SchemaDumper.ignore_tables accepts an array of String and / or Regexp values.'
             end
@@ -92,42 +105,26 @@ HEADER
             pk = @connection.primary_key(table)
           end
 
-          tbl.print "  create_table #{table.inspect}"
+          tbl.print "  create_table #{remove_prefix_and_suffix(table).inspect}"
           if columns.detect { |c| c.name == pk }
             if pk != 'id'
-              tbl.print %Q(, :primary_key => "#{pk}")
+              tbl.print %Q(, primary_key: "#{pk}")
             end
           else
-            tbl.print ", :id => false"
+            tbl.print ", id: false"
           end
-          tbl.print ", :force => true"
+          tbl.print ", force: true"
           tbl.puts " do |t|"
 
           # then dump all non-primary key columns
           column_specs = columns.map do |column|
             raise StandardError, "Unknown type '#{column.sql_type}' for column '#{column.name}'" if @types[column.type].nil?
             next if column.name == pk
-            spec = {}
-            spec[:name]      = column.name.inspect
-
-            # AR has an optimization which handles zero-scale decimals as integers. This
-            # code ensures that the dumper still dumps the column as a decimal.
-            spec[:type]      = if column.type == :integer && /^(numeric|decimal)/ =~ column.sql_type
-                                 'decimal'
-                               else
-                                 column.type.to_s
-                               end
-            spec[:limit]     = column.limit.inspect if column.limit != @types[column.type][:limit] && spec[:type] != 'decimal'
-            spec[:precision] = column.precision.inspect if column.precision
-            spec[:scale]     = column.scale.inspect if column.scale
-            spec[:null]      = 'false' unless column.null
-            spec[:default]   = default_string(column.default) if column.has_default?
-            (spec.keys - [:name, :type]).each{ |k| spec[k].insert(0, "#{k.inspect} => ")}
-            spec
+            @connection.column_spec(column, @types)
           end.compact
 
           # find all migration keys used in this table
-          keys = [:name, :limit, :precision, :scale, :default, :null]
+          keys = @connection.migration_keys
 
           # figure out the lengths for each column based on above keys
           lengths = keys.map { |key|
@@ -170,34 +167,23 @@ HEADER
         stream
       end
 
-      def default_string(value)
-        case value
-        when BigDecimal
-          value.to_s
-        when Date, DateTime, Time
-          "'" + value.to_s(:db) + "'"
-        else
-          value.inspect
-        end
-      end
-
       def indexes(table, stream)
         if (indexes = @connection.indexes(table)).any?
           add_index_statements = indexes.map do |index|
             statement_parts = [
-              ('add_index ' + index.table.inspect),
+              ('add_index ' + remove_prefix_and_suffix(index.table).inspect),
               index.columns.inspect,
-              (':name => ' + index.name.inspect),
+              ('name: ' + index.name.inspect),
             ]
-            statement_parts << ':unique => true' if index.unique
+            statement_parts << 'unique: true' if index.unique
 
             index_lengths = (index.lengths || []).compact
-            statement_parts << (':length => ' + Hash[index.columns.zip(index.lengths)].inspect) unless index_lengths.empty?
+            statement_parts << ('length: ' + Hash[index.columns.zip(index.lengths)].inspect) unless index_lengths.empty?
 
             index_orders = (index.orders || {})
-            statement_parts << (':order => ' + index.orders.inspect) unless index_orders.empty?
+            statement_parts << ('order: ' + index.orders.inspect) unless index_orders.empty?
 
-            statement_parts << (':where => ' + index.where.inspect) if index.where
+            statement_parts << ('where: ' + index.where.inspect) if index.where
 
             '  ' + statement_parts.join(', ')
           end
@@ -205,6 +191,10 @@ HEADER
           stream.puts add_index_statements.sort.join("\n")
           stream.puts
         end
+      end
+
+      def remove_prefix_and_suffix(table)
+        table.gsub(/^(#{ActiveRecord::Base.table_name_prefix})(.+)(#{ActiveRecord::Base.table_name_suffix})$/,  "\\2")
       end
   end
 end
