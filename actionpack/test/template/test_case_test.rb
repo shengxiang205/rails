@@ -64,18 +64,18 @@ module ActionView
       assert_equal 'Howdy!', from_another_helper
     end
 
-    test "determine_default_helper_class returns nil if name.sub(/Test$/, '').constantize resolves to a class" do
+    test "determine_default_helper_class returns nil if the test name constant resolves to a class" do
       assert_nil self.class.determine_default_helper_class("String")
     end
 
-    test "delegates notice to request.flash" do
-      view.request.flash.expects(:notice).with("this message")
-      view.notice("this message")
+    test "delegates notice to request.flash[:notice]" do
+      view.request.flash.expects(:[]).with(:notice)
+      view.notice
     end
 
-    test "delegates alert to request.flash" do
-      view.request.flash.expects(:alert).with("this message")
-      view.alert("this message")
+    test "delegates alert to request.flash[:alert]" do
+      view.request.flash.expects(:[]).with(:alert)
+      view.alert
     end
 
     test "uses controller lookup context" do
@@ -222,6 +222,25 @@ module ActionView
       end
     end
 
+    test "is able to use mounted routes" do
+      with_routing do |set|
+        app = Class.new do
+          def self.routes
+            @routes ||= ActionDispatch::Routing::RouteSet.new
+          end
+
+          routes.draw { get "bar", :to => lambda {} }
+
+          def self.call(*)
+          end
+        end
+
+        set.draw { mount app => "/foo", :as => "foo_app" }
+
+        assert_equal '/foo/bar', foo_app.bar_path
+      end
+    end
+
     test "named routes can be used from helper included in view" do
       with_routing do |set|
         set.draw { resources :contents }
@@ -301,6 +320,35 @@ module ActionView
       assert_raise ActiveSupport::TestCase::Assertion, /Somebody else.*David/m do
         assert_template :partial => "_partial_for_use_in_layout", :locals => { :name => "Somebody Else" }
       end
+    end
+
+    test 'supports different locals on the same partial' do
+      controller.controller_path = "test"
+      render(:template => "test/render_two_partials")
+      assert_template partial: '_partial', locals: { 'first' => '1' }
+      assert_template partial: '_partial', locals: { 'second' => '2' }
+    end
+
+    test 'raises descriptive error message when template was not rendered' do
+      controller.controller_path = "test"
+      render(template: "test/hello_world_with_partial")
+      e = assert_raise ActiveSupport::TestCase::Assertion do
+        assert_template partial: 'i_was_never_rendered', locals: { 'did_not' => 'happen' }
+      end
+      assert_match "i_was_never_rendered to be rendered but it was not.", e.message
+      assert_match 'Expected ["/test/partial"] to include "i_was_never_rendered"', e.message
+    end
+
+    test 'specifying locals works when the partial is inside a directory with underline prefix' do
+      controller.controller_path = "test"
+      render(template: 'test/render_partial_inside_directory')
+      assert_template partial: 'test/_directory/_partial_with_locales', locals: { 'name' => 'Jane' }
+    end
+
+    test 'specifying locals works when the partial is inside a directory without underline prefix' do
+      controller.controller_path = "test"
+      render(template: 'test/render_partial_inside_directory')
+      assert_template partial: 'test/_directory/partial_with_locales', locals: { 'name' => 'Jane' }
     end
   end
 

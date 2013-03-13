@@ -3,6 +3,7 @@ require "cases/helper"
 require 'models/person'
 require 'models/job'
 require 'models/reader'
+require 'models/ship'
 require 'models/legacy_thing'
 require 'models/reference'
 require 'models/string_key_object'
@@ -18,8 +19,8 @@ class LockWithCustomColumnWithoutDefault < ActiveRecord::Base
   self.locking_column = :custom_lock_version
 end
 
-class ReadonlyFirstNamePerson < Person
-  attr_readonly :first_name
+class ReadonlyNameShip < Ship
+  attr_readonly :name
 end
 
 class OptimisticLockingTest < ActiveRecord::TestCase
@@ -200,15 +201,15 @@ class OptimisticLockingTest < ActiveRecord::TestCase
   end
 
   def test_readonly_attributes
-    assert_equal Set.new([ 'first_name' ]), ReadonlyFirstNamePerson.readonly_attributes
+    assert_equal Set.new([ 'name' ]), ReadonlyNameShip.readonly_attributes
 
-    p = ReadonlyFirstNamePerson.create(:first_name => "unchangeable name")
-    p.reload
-    assert_equal "unchangeable name", p.first_name
+    s = ReadonlyNameShip.create(:name => "unchangeable name")
+    s.reload
+    assert_equal "unchangeable name", s.name
 
-    p.update_attributes(:first_name => "changed name")
-    p.reload
-    assert_equal "unchangeable name", p.first_name
+    s.update(name: "changed name")
+    s.reload
+    assert_equal "unchangeable name", s.name
   end
 
   def test_quote_table_name
@@ -323,7 +324,7 @@ class OptimisticLockingWithSchemaChangeTest < ActiveRecord::TestCase
 
     def counter_test(model, expected_count)
       add_counter_column_to(model)
-      object = model.find(:first)
+      object = model.first
       assert_equal 0, object.test_count
       assert_equal 0, object.send(model.locking_column)
       yield object.id
@@ -358,18 +359,7 @@ unless current_adapter?(:SybaseAdapter, :OpenBaseAdapter) || in_memory_db?
     def test_sane_find_with_lock
       assert_nothing_raised do
         Person.transaction do
-          Person.find 1, :lock => true
-        end
-      end
-    end
-
-    # Test scoped lock.
-    def test_sane_find_with_scoped_lock
-      assert_nothing_raised do
-        Person.transaction do
-          Person.send(:with_scope, :find => { :lock => true }) do
-            Person.find 1
-          end
+          Person.lock.find(1)
         end
       end
     end
@@ -380,7 +370,7 @@ unless current_adapter?(:SybaseAdapter, :OpenBaseAdapter) || in_memory_db?
       def test_eager_find_with_lock
         assert_nothing_raised do
           Person.transaction do
-            Person.find 1, :include => :readers, :lock => true
+            Person.includes(:readers).lock.find(1)
           end
         end
       end

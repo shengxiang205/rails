@@ -1,6 +1,6 @@
-require 'active_support/core_ext/object/blank'
 require 'active_support/core_ext/object/try'
 require 'active_support/core_ext/kernel/singleton_class'
+require 'thread'
 
 module ActionView
   # = Action View Template
@@ -80,8 +80,7 @@ module ActionView
     # problems with converting the user's data to
     # the <tt>default_internal</tt>.
     #
-    # To do so, simply raise the raise +WrongEncodingError+
-    # as follows:
+    # To do so, simply raise +WrongEncodingError+ as follows:
     #
     #     raise WrongEncodingError.new(
     #       problematic_string,
@@ -92,6 +91,7 @@ module ActionView
       autoload :Error
       autoload :Handlers
       autoload :Text
+      autoload :Types
     end
 
     extend Template::Handlers
@@ -121,7 +121,8 @@ module ActionView
       @locals            = details[:locals] || []
       @virtual_path      = details[:virtual_path]
       @updated_at        = details[:updated_at] || Time.now
-      @formats           = Array(format).map { |f| f.is_a?(Mime::Type) ? f.ref : f }
+      @formats           = Array(format).map { |f| f.respond_to?(:ref) ? f.ref : f  }
+      @compile_mutex     = Mutex.new
     end
 
     # Returns if the underlying handler supports streaming. If so,
@@ -137,7 +138,7 @@ module ActionView
     # we use a bang in this instrumentation because you don't want to
     # consume this in production. This is only slow if it's being listened to.
     def render(view, locals, buffer=nil, &block)
-      ActiveSupport::Notifications.instrument("!render_template.action_view", :virtual_path => @virtual_path) do
+      ActiveSupport::Notifications.instrument("!render_template.action_view", virtual_path: @virtual_path, identifier: @identifier) do
         compile!(view)
         view.send(method_name, locals, buffer, &block)
       end
@@ -146,7 +147,13 @@ module ActionView
     end
 
     def mime_type
+      message = 'Template#mime_type is deprecated and will be removed in Rails 4.1. Please use type method instead.'
+      ActiveSupport::Deprecation.warn message
       @mime_type ||= Mime::Type.lookup_by_extension(@formats.first.to_s) if @formats.first
+    end
+
+    def type
+      @type ||= Types[@formats.first] if @formats.first
     end
 
     # Receives a view object and return a template similar to self by using @virtual_path.
@@ -223,18 +230,28 @@ module ActionView
       def compile!(view) #:nodoc:
         return if @compiled
 
-        if view.is_a?(ActionView::CompiledTemplates)
-          mod = ActionView::CompiledTemplates
-        else
-          mod = view.singleton_class
+        # Templates can be used concurrently in threaded environments
+        # so compilation and any instance variable modification must
+        # be synchronized
+        @compile_mutex.synchronize do
+          # Any thread holding this lock will be compiling the template needed
+          # by the threads waiting. So re-check the @compiled flag to avoid
+          # re-compilation
+          return if @compiled
+
+          if view.is_a?(ActionView::CompiledTemplates)
+            mod = ActionView::CompiledTemplates
+          else
+            mod = view.singleton_class
+          end
+
+          compile(view, mod)
+
+          # Just discard the source if we have a virtual path. This
+          # means we can get the template back.
+          @source = nil if @virtual_path
+          @compiled = true
         end
-
-        compile(view, mod)
-
-        # Just discard the source if we have a virtual path. This
-        # means we can get the template back.
-        @source = nil if @virtual_path
-        @compiled = true
       end
 
       # Among other things, this method is responsible for properly setting

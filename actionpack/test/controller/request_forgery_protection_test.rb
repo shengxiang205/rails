@@ -9,7 +9,7 @@ module RequestForgeryProtectionActions
   end
 
   def show_button
-    render :inline => "<%= button_to('New', '/') {} %>"
+    render :inline => "<%= button_to('New', '/') %>"
   end
 
   def external_form
@@ -56,22 +56,31 @@ module RequestForgeryProtectionActions
 end
 
 # sample controllers
-class RequestForgeryProtectionController < ActionController::Base
+class RequestForgeryProtectionControllerUsingResetSession < ActionController::Base
   include RequestForgeryProtectionActions
-  protect_from_forgery :only => %w(index meta)
+  protect_from_forgery :only => %w(index meta), :with => :reset_session
 end
 
 class RequestForgeryProtectionControllerUsingException < ActionController::Base
   include RequestForgeryProtectionActions
-  protect_from_forgery :only => %w(index meta)
+  protect_from_forgery :only => %w(index meta), :with => :exception
+end
 
-  def handle_unverified_request
-    raise(ActionController::InvalidAuthenticityToken)
+class RequestForgeryProtectionControllerUsingNullSession < ActionController::Base
+  protect_from_forgery :with => :null_session
+
+  def signed
+    cookies.signed[:foo] = 'bar'
+    render :nothing => true
+  end
+
+  def encrypted
+    cookies.encrypted[:foo] = 'bar'
+    render :nothing => true
   end
 end
 
-
-class FreeCookieController < RequestForgeryProtectionController
+class FreeCookieController < RequestForgeryProtectionControllerUsingResetSession
   self.allow_forgery_protection = false
 
   def index
@@ -79,11 +88,11 @@ class FreeCookieController < RequestForgeryProtectionController
   end
 
   def show_button
-    render :inline => "<%= button_to('New', '/') {} %>"
+    render :inline => "<%= button_to('New', '/') %>"
   end
 end
 
-class CustomAuthenticityParamController < RequestForgeryProtectionController
+class CustomAuthenticityParamController < RequestForgeryProtectionControllerUsingResetSession
   def form_authenticity_param
     'foobar'
   end
@@ -172,6 +181,10 @@ module RequestForgeryProtectionTests
 
   def test_should_allow_get
     assert_not_blocked { get :index }
+  end
+
+  def test_should_allow_head
+    assert_not_blocked { head :index }
   end
 
   def test_should_allow_post_without_token_on_unsafe_action
@@ -268,7 +281,7 @@ end
 
 # OK let's get our test on
 
-class RequestForgeryProtectionControllerTest < ActionController::TestCase
+class RequestForgeryProtectionControllerUsingResetSessionTest < ActionController::TestCase
   include RequestForgeryProtectionTests
 
   setup do
@@ -284,6 +297,28 @@ class RequestForgeryProtectionControllerTest < ActionController::TestCase
     get :meta
     assert_select 'meta[name=?][content=?]', 'csrf-param', 'custom_authenticity_token'
     assert_select 'meta[name=?][content=?]', 'csrf-token', 'cf50faa3fe97702ca1ae&lt;=?'
+  end
+end
+
+class NullSessionDummyKeyGenerator
+  def generate_key(secret)
+    '03312270731a2ed0d11ed091c2338a06'
+  end
+end
+
+class RequestForgeryProtectionControllerUsingNullSessionTest < ActionController::TestCase  
+  def setup
+    @request.env[ActionDispatch::Cookies::GENERATOR_KEY] = NullSessionDummyKeyGenerator.new
+  end
+
+  test 'should allow to set signed cookies' do
+    post :signed
+    assert_response :ok
+  end
+
+  test 'should allow to set encrypted cookies' do
+    post :encrypted
+    assert_response :ok
   end
 end
 
@@ -324,7 +359,7 @@ class FreeCookieControllerTest < ActionController::TestCase
 
   test 'should not emit a csrf-token meta tag' do
     get :meta
-    assert_blank @response.body
+    assert @response.body.blank?
   end
 end
 

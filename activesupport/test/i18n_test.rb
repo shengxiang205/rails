@@ -62,7 +62,7 @@ class I18nTest < ActiveSupport::TestCase
   end
 
   def test_date_order
-    assert_equal [:year, :month, :day], I18n.translate(:'date.order')
+    assert_equal %w(year month day), I18n.translate(:'date.order')
   end
 
   def test_time_am
@@ -96,5 +96,10 @@ class I18nTest < ActiveSupport::TestCase
   ensure
     I18n.backend.store_translations 'en', :support => { :array => { :two_words_connector => default_two_words_connector } }
     I18n.backend.store_translations 'en', :support => { :array => { :last_word_connector => default_last_word_connector } }
+  end
+
+  def test_to_sentence_with_empty_i18n_store
+    I18n.backend.store_translations 'empty', {}
+    assert_equal 'a, b, and c', %w[a b c].to_sentence(locale: 'empty')
   end
 end

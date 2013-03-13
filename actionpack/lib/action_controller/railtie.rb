@@ -9,6 +9,8 @@ module ActionController
   class Railtie < Rails::Railtie #:nodoc:
     config.action_controller = ActiveSupport::OrderedOptions.new
 
+    config.eager_load_namespaces << ActionController
+
     initializer "action_controller.assets_config", :group => :all do |app|
       app.config.action_controller.assets_dir ||= app.config.paths["public"].first
     end
@@ -17,21 +19,28 @@ module ActionController
       ActionController::Helpers.helpers_path = app.helpers_paths
     end
 
+    initializer "action_controller.parameters_config" do |app|
+      options = app.config.action_controller
+
+      ActionController::Parameters.permit_all_parameters = options.delete(:permit_all_parameters) { false }
+      ActionController::Parameters.action_on_unpermitted_parameters = options.delete(:action_on_unpermitted_parameters) do
+        (Rails.env.test? || Rails.env.development?) ? :log : false
+      end
+    end
+
     initializer "action_controller.set_configs" do |app|
       paths   = app.config.paths
       options = app.config.action_controller
 
-      options.logger               ||= Rails.logger
-      options.cache_store          ||= Rails.cache
+      options.logger      ||= Rails.logger
+      options.cache_store ||= Rails.cache
 
-      options.javascripts_dir      ||= paths["public/javascripts"].first
-      options.stylesheets_dir      ||= paths["public/stylesheets"].first
-      options.page_cache_directory ||= paths["public"].first
+      options.javascripts_dir ||= paths["public/javascripts"].first
+      options.stylesheets_dir ||= paths["public/stylesheets"].first
 
       # Ensure readers methods get compiled
-      options.asset_path           ||= app.config.asset_path
-      options.asset_host           ||= app.config.asset_host
-      options.relative_url_root    ||= app.config.relative_url_root
+      options.asset_host        ||= app.config.asset_host
+      options.relative_url_root ||= app.config.relative_url_root
 
       ActiveSupport.on_load(:action_controller) do
         include app.routes.mounted_helpers

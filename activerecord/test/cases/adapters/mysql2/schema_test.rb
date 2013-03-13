@@ -20,7 +20,7 @@ module ActiveRecord
       end
 
       def test_schema
-        assert @omgpost.find(:first)
+        assert @omgpost.first
       end
 
       def test_primary_key
@@ -37,13 +37,11 @@ module ActiveRecord
       end
 
       def test_tables_quoting
-        begin
-          @connection.tables(nil, "foo-bar", nil)
-          flunk
-        rescue => e
-          # assertion for *quoted* database properly
-          assert_match(/database 'foo-bar'/, e.inspect)
-        end
+        @connection.tables(nil, "foo-bar", nil)
+        flunk
+      rescue => e
+        # assertion for *quoted* database properly
+        assert_match(/database 'foo-bar'/, e.inspect)
       end
 
     end

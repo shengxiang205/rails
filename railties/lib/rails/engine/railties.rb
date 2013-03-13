@@ -1,26 +1,29 @@
 module Rails
   class Engine < Railtie
     class Railties
-      # TODO Write tests for this behavior extracted from Application
-      def initialize(config)
-        @config = config
-      end
+      include Enumerable
+      attr_reader :_all
 
-      def all(&block)
-        @all ||= []
-        @all.each(&block) if block
-        @all
-      end
-
-      def self.railties
-        @railties ||= ::Rails::Railtie.subclasses.map(&:instance)
+      def initialize
+        @_all ||= ::Rails::Railtie.subclasses.map(&:instance) +
+          ::Rails::Engine.subclasses.map(&:instance)
       end
 
       def self.engines
         @engines ||= ::Rails::Engine.subclasses.map(&:instance)
       end
 
-      delegate :railties, :engines, :to => "self.class"
+      def each(*args, &block)
+        _all.each(*args, &block)
+      end
+
+      def -(others)
+        _all - others
+      end
+
+      delegate :engines, to: "self.class"
     end
   end
 end
+
+ActiveSupport::Deprecation.deprecate_methods(Rails::Engine::Railties, :engines)

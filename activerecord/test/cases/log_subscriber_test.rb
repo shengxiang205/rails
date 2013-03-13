@@ -1,4 +1,5 @@
 require "cases/helper"
+require "models/binary"
 require "models/developer"
 require "models/post"
 require "active_support/log_subscriber/test_helper"
@@ -6,6 +7,19 @@ require "active_support/log_subscriber/test_helper"
 class LogSubscriberTest < ActiveRecord::TestCase
   include ActiveSupport::LogSubscriber::TestHelper
   include ActiveSupport::Logger::Severity
+
+  class TestDebugLogSubscriber < ActiveRecord::LogSubscriber
+    attr_reader :debugs
+
+    def initialize
+      @debugs = []
+      super
+    end
+
+    def debug message
+      @debugs << message
+    end
+  end
 
   fixtures :posts
 
@@ -29,32 +43,29 @@ class LogSubscriberTest < ActiveRecord::TestCase
   def test_schema_statements_are_ignored
     event = Struct.new(:duration, :payload)
 
-    logger = Class.new(ActiveRecord::LogSubscriber) {
-      attr_accessor :debugs
-
-      def initialize
-        @debugs = []
-        super
-      end
-
-      def debug message
-        @debugs << message
-      end
-    }.new
+    logger = TestDebugLogSubscriber.new
     assert_equal 0, logger.debugs.length
 
-    logger.sql(event.new(0, { :sql => 'hi mom!' }))
+    logger.sql(event.new(0, sql: 'hi mom!'))
     assert_equal 1, logger.debugs.length
 
-    logger.sql(event.new(0, { :sql => 'hi mom!', :name => 'foo' }))
+    logger.sql(event.new(0, sql: 'hi mom!', name: 'foo'))
     assert_equal 2, logger.debugs.length
 
-    logger.sql(event.new(0, { :sql => 'hi mom!', :name => 'SCHEMA' }))
+    logger.sql(event.new(0, sql: 'hi mom!', name: 'SCHEMA'))
     assert_equal 2, logger.debugs.length
   end
 
+  def test_ignore_binds_payload_with_nil_column
+    event = Struct.new(:duration, :payload)
+
+    logger = TestDebugLogSubscriber.new
+    logger.sql(event.new(0, sql: 'hi mom!', binds: [[nil, 1]]))
+    assert_equal 1, logger.debugs.length
+  end
+
   def test_basic_query_logging
-    Developer.all
+    Developer.all.load
     wait
     assert_equal 1, @logger.logged(:debug).size
     assert_match(/Developer Load/, @logger.logged(:debug).last)
@@ -71,8 +82,8 @@ class LogSubscriberTest < ActiveRecord::TestCase
 
   def test_cached_queries
     ActiveRecord::Base.cache do
-      Developer.all
-      Developer.all
+      Developer.all.load
+      Developer.all.load
     end
     wait
     assert_equal 2, @logger.logged(:debug).size
@@ -82,7 +93,7 @@ class LogSubscriberTest < ActiveRecord::TestCase
 
   def test_basic_query_doesnt_log_when_level_is_not_debug
     @logger.level = INFO
-    Developer.all
+    Developer.all.load
     wait
     assert_equal 0, @logger.logged(:debug).size
   end
@@ -90,8 +101,8 @@ class LogSubscriberTest < ActiveRecord::TestCase
   def test_cached_queries_doesnt_log_when_level_is_not_debug
     @logger.level = INFO
     ActiveRecord::Base.cache do
-      Developer.all
-      Developer.all
+      Developer.all.load
+      Developer.all.load
     end
     wait
     assert_equal 0, @logger.logged(:debug).size
@@ -99,5 +110,13 @@ class LogSubscriberTest < ActiveRecord::TestCase
 
   def test_initializes_runtime
     Thread.new { assert_equal 0, ActiveRecord::LogSubscriber.runtime }.join
+  end
+
+  def test_binary_data_is_not_logged
+    skip if current_adapter?(:Mysql2Adapter)
+
+    Binary.create(data: 'some binary data')
+    wait
+    assert_match(/<16 bytes of binary data>/, @logger.logged(:debug).join)
   end
 end

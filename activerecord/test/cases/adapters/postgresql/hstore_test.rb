@@ -1,3 +1,5 @@
+# encoding: utf-8
+
 require "cases/helper"
 require 'active_record/base'
 require 'active_record/connection_adapters/postgresql_adapter'
@@ -9,14 +11,22 @@ class PostgresqlHstoreTest < ActiveRecord::TestCase
 
   def setup
     @connection = ActiveRecord::Base.connection
-    begin
-      @connection.transaction do
-        @connection.create_table('hstores') do |t|
-          t.hstore 'tags', :default => ''
-        end
-      end
-    rescue ActiveRecord::StatementInvalid
+
+    unless @connection.supports_extensions?
       return skip "do not test on PG without hstore"
+    end
+
+    unless @connection.extension_enabled?('hstore')
+      @connection.enable_extension 'hstore'
+      @connection.commit_db_transaction
+    end
+
+    @connection.reconnect!
+
+    @connection.transaction do
+      @connection.create_table('hstores') do |t|
+        t.hstore 'tags', :default => ''
+      end
     end
     @column = Hstore.columns.find { |c| c.name == 'tags' }
   end
@@ -25,8 +35,49 @@ class PostgresqlHstoreTest < ActiveRecord::TestCase
     @connection.execute 'drop table if exists hstores'
   end
 
+  def test_hstore_included_in_extensions
+    assert @connection.respond_to?(:extensions), "connection should have a list of extensions"
+    assert @connection.extensions.include?('hstore'), "extension list should include hstore"
+  end
+
+  def test_hstore_enabled
+    assert @connection.extension_enabled?('hstore')
+  end
+
+  def test_disable_hstore
+    if @connection.extension_enabled?('hstore')
+      @connection.disable_extension 'hstore'
+      assert_not @connection.extension_enabled?('hstore')
+    end
+  end
+
+  def test_enable_hstore
+    if @connection.extension_enabled?('hstore')
+      @connection.disable_extension 'hstore'
+    end
+
+    assert_not @connection.extension_enabled?('hstore')
+    @connection.enable_extension 'hstore'
+    assert @connection.extension_enabled?('hstore')
+  end
+
   def test_column
     assert_equal :hstore, @column.type
+  end
+
+  def test_change_table_supports_hstore
+    @connection.transaction do
+      @connection.change_table('hstores') do |t|
+        t.hstore 'users', default: ''
+      end
+      Hstore.reset_column_information
+      column = Hstore.columns.find { |c| c.name == 'users' }
+      assert_equal :hstore, column.type
+
+      raise ActiveRecord::Rollback # reset the schema change
+    end
+  ensure
+    Hstore.reset_column_information
   end
 
   def test_type_cast_hstore
@@ -88,7 +139,7 @@ class PostgresqlHstoreTest < ActiveRecord::TestCase
 
   def test_rewrite
     @connection.execute "insert into hstores (tags) VALUES ('1=>2')"
-    x = Hstore.find :first
+    x = Hstore.first
     x.tags = { '"a\'' => 'b' }
     assert x.save!
   end
@@ -96,13 +147,13 @@ class PostgresqlHstoreTest < ActiveRecord::TestCase
 
   def test_select
     @connection.execute "insert into hstores (tags) VALUES ('1=>2')"
-    x = Hstore.find :first
+    x = Hstore.first
     assert_equal({'1' => '2'}, x.tags)
   end
 
   def test_select_multikey
     @connection.execute "insert into hstores (tags) VALUES ('1=>2,2=>3')"
-    x = Hstore.find :first
+    x = Hstore.first
     assert_equal({'1' => '2', '2' => '3'}, x.tags)
   end
 
@@ -134,13 +185,19 @@ class PostgresqlHstoreTest < ActiveRecord::TestCase
     assert_cycle('a=>b' => 'bar', '1"foo' => '2')
   end
 
+  def test_quoting_special_characters
+    assert_cycle('ca' => 'cà', 'ac' => 'àc')
+  end
+
   private
   def assert_cycle hash
+    # test creation
     x = Hstore.create!(:tags => hash)
     x.reload
     assert_equal(hash, x.tags)
 
-    # make sure updates work
+    # test updating
+    x = Hstore.create!(:tags => {})
     x.tags = hash
     x.save!
     x.reload

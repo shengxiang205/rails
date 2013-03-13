@@ -7,13 +7,15 @@ module ActiveRecord
   module ConnectionHandling
     # Establishes a connection to the database that's used by all Active Record objects.
     def mysql2_connection(config)
+      config = config.symbolize_keys
+
       config[:username] = 'root' if config[:username].nil?
 
       if Mysql2::Client.const_defined? :FOUND_ROWS
         config[:flags] = Mysql2::Client::FOUND_ROWS
       end
 
-      client = Mysql2::Client.new(config.symbolize_keys)
+      client = Mysql2::Client.new(config)
       options = [config[:host], config[:username], config[:password], config[:database], config[:port], config[:socket], 0]
       ConnectionAdapters::Mysql2Adapter.new(client, logger, options, config)
     end
@@ -53,7 +55,7 @@ module ActiveRecord
       end
 
       def new_column(field, default, type, null, collation) # :nodoc:
-        Column.new(field, default, type, null, collation)
+        Column.new(field, default, type, null, collation, strict_mode?)
       end
 
       def error_number(exception)
@@ -74,6 +76,7 @@ module ActiveRecord
       end
 
       def reconnect!
+        super
         disconnect!
         connect
       end
@@ -82,6 +85,7 @@ module ActiveRecord
       # Disconnects from the database if already connected.
       # Otherwise, this method does nothing.
       def disconnect!
+        super
         unless @connection.nil?
           @connection.close
           @connection = nil
@@ -173,7 +177,7 @@ module ActiveRecord
       # # as values.
       # def select_one(sql, name = nil)
       #   result = execute(sql, name)
-      #   result.each(:as => :hash) do |r|
+      #   result.each(as: :hash) do |r|
       #     return r
       #   end
       # end
@@ -226,7 +230,7 @@ module ActiveRecord
       end
       alias :create :insert_sql
 
-      def exec_insert(sql, name, binds)
+      def exec_insert(sql, name, binds, pk = nil, sequence_name = nil)
         execute to_sql(sql, binds), name
       end
 
@@ -249,21 +253,7 @@ module ActiveRecord
 
       def configure_connection
         @connection.query_options.merge!(:as => :array)
-
-        # By default, MySQL 'where id is null' selects the last inserted id.
-        # Turn this off. http://dev.rubyonrails.org/ticket/6778
-        variable_assignments = ['SQL_AUTO_IS_NULL=0']
-        encoding = @config[:encoding]
-
-        # make sure we set the encoding
-        variable_assignments << "NAMES '#{encoding}'" if encoding
-
-        # increase timeout so mysql server doesn't disconnect us
-        wait_timeout = @config[:wait_timeout]
-        wait_timeout = 2592000 unless wait_timeout.is_a?(Fixnum)
-        variable_assignments << "@@wait_timeout = #{wait_timeout}"
-
-        execute("SET #{variable_assignments.join(', ')}", :skip_logging)
+        super
       end
 
       def version

@@ -1,6 +1,4 @@
 require 'isolation/abstract_unit'
-require 'stringio'
-require 'rack/test'
 
 module ApplicationTests
   class MiddlewareTest < ActiveSupport::TestCase
@@ -45,10 +43,9 @@ module ApplicationTests
         "ActionDispatch::Session::CookieStore",
         "ActionDispatch::Flash",
         "ActionDispatch::ParamsParser",
-        "ActionDispatch::Head",
+        "Rack::Head",
         "Rack::ConditionalGet",
-        "Rack::ETag",
-        "ActionDispatch::BestStandardsSupport"
+        "Rack::ETag"
       ], middleware
     end
 
@@ -58,8 +55,14 @@ module ApplicationTests
       assert !middleware.include?("Rack::Sendfile"), "Rack::Sendfile is not included in the default stack unless you set config.action_dispatch.x_sendfile_header"
     end
 
-    test "Rack::Cache is present when action_controller.perform_caching is set" do
-      add_to_config "config.action_controller.perform_caching = true"
+    test "Rack::Cache is not included by default" do
+      boot!
+
+      assert !middleware.include?("Rack::Cache"), "Rack::Cache is not included in the default stack unless you set config.action_dispatch.rack_cache"
+    end
+
+    test "Rack::Cache is present when action_dispatch.rack_cache is set" do
+      add_to_config "config.action_dispatch.rack_cache = true"
 
       boot!
 
@@ -74,10 +77,10 @@ module ApplicationTests
 
     test "ActionDispatch::SSL is configured with options when given" do
       add_to_config "config.force_ssl = true"
-      add_to_config "config.ssl_options = { :host => 'example.com' }"
+      add_to_config "config.ssl_options = { host: 'example.com' }"
       boot!
 
-      assert_equal AppTemplate::Application.middleware.first.args, [{:host => 'example.com'}]
+      assert_equal AppTemplate::Application.middleware.first.args, [{host: 'example.com'}]
     end
 
     test "removing Active Record omits its middleware" do
@@ -85,6 +88,12 @@ module ApplicationTests
       boot!
       assert !middleware.include?("ActiveRecord::ConnectionAdapters::ConnectionManagement")
       assert !middleware.include?("ActiveRecord::QueryCache")
+    end
+
+    test "removes lock if cache classes is set" do
+      add_to_config "config.cache_classes = true"
+      boot!
+      assert !middleware.include?("Rack::Lock")
     end
 
     test "removes lock if allow concurrency is set" do
@@ -148,6 +157,13 @@ module ApplicationTests
       assert_equal "Rack::Config", middleware.first
     end
 
+    test "can't change middleware after it's built" do
+      boot!
+      assert_raise RuntimeError do
+        app.config.middleware.use Rack::Config
+      end
+    end
+
     # ConditionalGet + Etag
     test "conditional get + etag middlewares handle http caching based on body" do
       make_basic_app
@@ -155,9 +171,9 @@ module ApplicationTests
       class ::OmgController < ActionController::Base
         def index
           if params[:nothing]
-            render :text => ""
+            render text: ""
           else
-            render :text => "OMG"
+            render text: "OMG"
           end
         end
       end

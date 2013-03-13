@@ -1,4 +1,3 @@
-#!/usr/bin/env rake
 require 'rake/testtask'
 require 'rake/packagetask'
 require 'rubygems/package_task'
@@ -38,6 +37,11 @@ namespace :test do
       %w(isolated_test_mysql isolated_test_mysql2 isolated_test_sqlite3 isolated_test_postgresql)
     run_without_aborting(*tasks)
   end
+end
+
+namespace :db do
+  task :create => ['mysql:build_databases', 'postgresql:build_databases']
+  task :drop => ['mysql:drop_databases', 'postgresql:drop_databases']
 end
 
 %w( mysql mysql2 postgresql sqlite3 sqlite3_mem firebird db2 oracle sybase openbase frontbase jdbcmysql jdbcpostgresql jdbcsqlite3 jdbcderby jdbch2 jdbchsqldb ).each do |adapter|
@@ -113,8 +117,18 @@ namespace :postgresql do
   desc 'Build the PostgreSQL test databases'
   task :build_databases do
     config = ARTest.config['connections']['postgresql']
-    %x( createdb -E UTF8 #{config['arunit']['database']} )
-    %x( createdb -E UTF8 #{config['arunit2']['database']} )
+    %x( createdb -E UTF8 -T template0 #{config['arunit']['database']} )
+    %x( createdb -E UTF8 -T template0 #{config['arunit2']['database']} )
+
+    # prepare hstore
+    version = %x( createdb --version ).strip.gsub(/(.*)(\d\.\d\.\d)$/, "\\2")
+    %w(arunit arunit2).each do |db|
+      if version < "9.1.0"
+        puts "Please prepare hstore data type. See http://www.postgresql.org/docs/9.0/static/hstore.html"
+      else
+        %x( psql #{config[db]['database']} -c "CREATE EXTENSION hstore;" )
+      end
+    end
   end
 
   desc 'Drop the PostgreSQL test databases'

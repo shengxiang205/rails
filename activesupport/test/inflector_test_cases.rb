@@ -47,6 +47,7 @@ module InflectorTestCases
     "medium"      => "media",
     "stadium"     => "stadia",
     "analysis"    => "analyses",
+    "my_analysis" => "my_analyses",
 
     "node_child"  => "node_children",
     "child"       => "children",
@@ -109,7 +110,9 @@ module InflectorTestCases
 
     # regression tests against improper inflection regexes
     "|ice"        => "|ices",
-    "|ouse"       => "|ouses"
+    "|ouse"       => "|ouses",
+    "slice"       => "slices",
+    "police"      => "police"
   }
 
   CamelToUnderscore = {
@@ -305,5 +308,8 @@ module InflectorTestCases
     'child'  => 'children',
     'sex'    => 'sexes',
     'move'   => 'moves',
+    'cow'    => 'kine',
+    'zombie' => 'zombies',
+    'genus'  => 'genera'
   }
 end

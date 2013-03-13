@@ -51,7 +51,7 @@ module ActiveRecord
       extend ActiveSupport::Concern
 
       included do
-        config_attribute :lock_optimistically, :global => true
+        class_attribute :lock_optimistically, instance_writer: false
         self.lock_optimistically = true
       end
 
@@ -66,7 +66,7 @@ module ActiveRecord
           send(lock_col + '=', previous_lock_value + 1)
         end
 
-        def update(attribute_names = @attributes.keys) #:nodoc:
+        def update_record(attribute_names = @attributes.keys) #:nodoc:
           return super unless locking_enabled?
           return 0 if attribute_names.empty?
 
@@ -82,11 +82,11 @@ module ActiveRecord
 
             stmt = relation.where(
               relation.table[self.class.primary_key].eq(id).and(
-                relation.table[lock_col].eq(quote_value(previous_lock_value))
+                relation.table[lock_col].eq(self.class.quote_value(previous_lock_value))
               )
             ).arel.compile_update(arel_attributes_with_values_for_update(attribute_names))
 
-            affected_rows = connection.update stmt
+            affected_rows = self.class.connection.update stmt
 
             unless affected_rows == 1
               raise ActiveRecord::StaleObjectError.new(self, "update")
@@ -117,7 +117,7 @@ module ActiveRecord
           if locking_enabled?
             column_name = self.class.locking_column
             column      = self.class.columns_hash[column_name]
-            substitute  = connection.substitute_at(column, relation.bind_values.length)
+            substitute  = self.class.connection.substitute_at(column, relation.bind_values.length)
 
             relation = relation.where(self.class.arel_table[column_name].eq(substitute))
             relation.bind_values << [column, self[column_name].to_i]
@@ -164,16 +164,16 @@ module ActiveRecord
           super
         end
 
-        # If the locking column has no default value set,
-        # start the lock version at zero. Note we can't use
-        # <tt>locking_enabled?</tt> at this point as
-        # <tt>@attributes</tt> may not have been initialized yet.
-        def initialize_attributes(attributes) #:nodoc:
-          if attributes.key?(locking_column) && lock_optimistically
-            attributes[locking_column] ||= 0
-          end
+        def column_defaults
+          @column_defaults ||= begin
+            defaults = super
 
-          attributes
+            if defaults.key?(locking_column) && lock_optimistically
+              defaults[locking_column] ||= 0
+            end
+
+            defaults
+          end
         end
       end
     end

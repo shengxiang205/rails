@@ -1,4 +1,6 @@
 require 'rbconfig'
+require 'minitest/parallel_each'
+
 module ActiveSupport
   module Testing
     class RemoteError < StandardError
@@ -12,8 +14,8 @@ module ActiveSupport
     end
 
     class ProxyTestResult
-      def initialize
-        @calls = []
+      def initialize(calls = [])
+        @calls = calls
       end
 
       def add_error(e)
@@ -27,20 +29,42 @@ module ActiveSupport
         end
       end
 
+      def marshal_dump
+        @calls
+      end
+
+      def marshal_load(calls)
+        initialize(calls)
+      end
+
       def method_missing(name, *args)
         @calls << [name, args]
       end
     end
 
     module Isolation
+      require 'thread'
+
+      def self.included(klass) #:nodoc:
+        klass.extend(Module.new {
+          def test_methods
+            ParallelEach.new super
+          end
+        })
+      end
+
       def self.forking_env?
         !ENV["NO_FORK"] && ((RbConfig::CONFIG['host_os'] !~ /mswin|mingw/) && (RUBY_PLATFORM !~ /java/))
       end
 
+      @@class_setup_mutex = Mutex.new
+
       def _run_class_setup      # class setup method should only happen in parent
-        unless defined?(@@ran_class_setup) || ENV['ISOLATION_TEST']
-          self.class.setup if self.class.respond_to?(:setup)
-          @@ran_class_setup = true
+        @@class_setup_mutex.synchronize do
+          unless defined?(@@ran_class_setup) || ENV['ISOLATION_TEST']
+            self.class.setup if self.class.respond_to?(:setup)
+            @@ran_class_setup = true
+          end
         end
       end
 
